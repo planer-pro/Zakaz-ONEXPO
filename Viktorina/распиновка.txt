@@ -1,0 +1,43 @@
+				raw		tx
+				-gnd	rx
+				rst		rst 
+				-vcc	gnd-
+				a3		2
+				a2		3
+				a1		4
+				a0		5
+				13		6
+				12		7
+				11		8
+				10		9
+
+tx_en		vcc-
+pwr			ce
+cd			.
+.			.
+mosi 		miso
+csn			sck
+-gnd		gnd-
+
+
+CPU          nRF905 module
+///                 3V3----------VCC   (3.3V)
+///             pin D8-----------CE    (chip enable in)
+///             pin D9-----------TX_EN (transmit enable in)
+///          SS pin D10----------CSN   (chip select in)
+///        MOSI pin D11----------MOSI  (SPI Data in)
+///        MISO pin D12----------MISO  (SPI data out)
+///			SCK pin D13----------SCK   (SPI clock in)
+///                 GND----------GND   (ground in)
+
+				pin D2-----------CD
+				pin D7-----------Button---------GND
+				pin D5-----------LedPin
+
+511 на диапазоне 422.4MHz – 473.5MHz с шагом 100KHz
+511 на диапазоне 844.8MHz – 947MHz с шагом 200KHz
+
+But each channel overlaps adjacent channels so there are only a total of 170 usable channels at once. 
+
+чувак тестил на 869 мегагерц
+121 канал до 869 мегагерц

@@ -1,0 +1,289 @@
+#include <Arduino.h>
+#include <FastLED.h>
+
+#define NUM_LEDS 15
+#define LED_STRIP_PIN 5
+CRGB leds[NUM_LEDS];
+
+struct Player
+{
+    int score;
+    int firstButtonPin;
+    int buttonsCount;
+    int firstButtonLedPin;
+    int firstScoreLedPin;
+    int lastScoreLedPin;
+    int scoreLedsCount() { return abs(lastScoreLedPin - firstScoreLedPin); };
+    int playerSound;
+    CRGB color;
+
+    Player(int firstButtonPin, int buttonsCount, int firstButtonLedPin, int firstScoreLedPin, int lastScoreLedPin, CRGB color, int playerSound)
+        : firstButtonPin(firstButtonPin), buttonsCount(buttonsCount), firstButtonLedPin(firstButtonLedPin), firstScoreLedPin(firstScoreLedPin), lastScoreLedPin(lastScoreLedPin), color(color), playerSound(playerSound) {}
+};
+
+struct Buttons
+{
+    void init(Player *players, int playersCount)
+    {
+        for (int i = 0; i < playersCount; i++)
+        {
+            for (int b = 0; b < players[i].buttonsCount; b++)
+            {
+                pinMode(players[i].firstButtonPin + b, INPUT_PULLUP);
+                delay(10);
+            }
+        }
+    }
+
+    bool getPressedKey(Player *players, int playersCount, int &outPlayer, int &outKey)
+    {
+        for (int p = 0; p < playersCount; p++)
+        {
+            for (int b = 0; b < players[p].buttonsCount; b++)
+            {
+                if (!digitalRead(players[p].firstButtonPin + b))
+                {
+                    outPlayer = p;
+                    outKey = b;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+};
+
+struct LedStrip
+{
+    LedStrip(int startPin, int ledsCount) : startPin(startPin), ledsCount(ledsCount) {}
+
+    void setLedColor(int pin, CRGB color)
+    {
+        leds[pin] = color;
+        FastLED.show();
+    }
+
+    void setLedLineColor(int firstPin, int lastPin, CRGB color)
+    {
+        if (firstPin > lastPin)
+        {
+            int tmp = firstPin;
+            firstPin = lastPin;
+            lastPin = tmp;
+        }
+        for (int i = firstPin; i <= lastPin; i++)
+        {
+            leds[i] = color;
+        }
+        FastLED.show();
+    }
+
+    void turnOff() { setLedLineColor(startPin, startPin + ledsCount - 1, CRGB::Black); }
+
+    int startPin;
+    int ledsCount;
+};
+
+struct Scoreboard : public LedStrip
+{
+    Scoreboard(int startPin, int ledsCount) : LedStrip(startPin, ledsCount) {}
+
+    void displayScore(Player *players, int playersCount)
+    {
+        turnOff();
+        for (int i = 0; i < playersCount; i++)
+        {
+            if (players[i].score > 0)
+            {
+                int lastPin = players[i].firstScoreLedPin < players[i].lastScoreLedPin ? players[i].firstScoreLedPin + players[i].score - 1 : players[i].firstScoreLedPin - players[i].score + 1;
+                setLedLineColor(players[i].firstScoreLedPin, lastPin, players[i].color);
+            }
+        }
+        setLedColor(ledsCount / 2, CRGB::Yellow);
+    }
+
+    void displayWinner(Player &player)
+    {
+        static bool state = false;
+        static uint32_t timer = 0;
+
+        if (millis() - timer > 250)
+        {
+            state = !state;
+            timer = millis();
+            setLedLineColor(player.firstScoreLedPin, player.lastScoreLedPin, state ? player.color : CRGB::Black);
+        }
+    }
+
+    void displayIntro()
+    {
+        for (int i = startPin; i <= startPin + ledsCount - 1; i++)
+        {
+            setLedColor(i, CRGB::Yellow);
+            delay(50);
+        }
+
+        for (int i = startPin + ledsCount - 1; i >= startPin; i--)
+        {
+            setLedColor(i, CRGB::Black);
+            delay(50);
+        }
+    }
+};
+
+struct ButtonsLeds : public LedStrip
+{
+    ButtonsLeds(int startPin, int ledsCount) : LedStrip(startPin, ledsCount) {}
+
+    void displayLeds(Player *players, int playersCount, int button)
+    {
+        turnOff();
+        for (int i = 0; i < playersCount; i++)
+        {
+            setLedColor(players[i].firstButtonLedPin + button, players[i].color);
+        }
+    }
+};
+
+class GameLogic
+{
+    enum class GameState
+    {
+        Intro,
+        Turn,
+        TurnEnded,
+        GameOver
+    } state = GameState::Intro;
+
+public:
+    GameLogic(Scoreboard &scoreboard, Buttons &buttons, ButtonsLeds &buttonsLeds, Player *players, int playersCount)
+        : scoreboard(scoreboard), buttons(buttons), buttonsLeds(buttonsLeds), players(players), playersCount(playersCount)
+    {
+    }
+
+    void start()
+    {
+        buttons.init(players, playersCount);
+        scoreboard.displayIntro();
+        scoreboard.displayScore(players, playersCount);
+        nextTurn();
+    }
+
+    void loop()
+    {
+        static uint32_t timer = 0;
+
+        if (state == GameState::Turn)
+        {
+            int pressedPlayer = 0;
+            int pressedKey = 0;
+            if (buttons.getPressedKey(players, playersCount, pressedPlayer, pressedKey))
+            {
+                addScoreToPlayer(pressedPlayer, pressedKey == expectingKey);
+
+                if (getWinnerPlayer(winnerId))
+                {
+                    state = GameState::GameOver;
+                    Serial.println(String(winnerId) + " Win");
+                    tone(8, players[winnerId].playerSound, 1000);
+                }
+                else
+                {
+                    state = GameState::TurnEnded;
+                    timer = millis();
+                    scoreboard.displayScore(players, playersCount);
+                    tone(8, players[pressedPlayer].playerSound, pressedKey == expectingKey ? 50 : 500);
+                }
+            }
+        }
+        else if (state == GameState::TurnEnded)
+        {
+            if (millis() - timer > 500)
+            {
+                nextTurn();
+            }
+        }
+        else if (state == GameState::GameOver)
+        {
+            scoreboard.displayWinner(players[winnerId]);
+        }
+    }
+
+    void addScoreToPlayer(int playerId, bool add)
+    {
+        for (int i = 0; i < playersCount; i++)
+        {
+            if (add)
+            {
+                players[i].score += i == playerId ? 1 : -1;
+            }
+            else
+            {
+                players[i].score += i == playerId ? -1 : 1;
+            }
+        }
+    }
+
+    bool getWinnerPlayer(int &outPlayerId)
+    {
+        for (int i = 0; i < playersCount; i++)
+        {
+            if (players[i].score > players[i].scoreLedsCount())
+            {
+                outPlayerId = i;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void nextTurn()
+    {
+        uint8_t rnd;
+        do
+        {
+            rnd = random(0, players[0].buttonsCount);
+        } while (expectingKey == rnd);
+
+        expectingKey = rnd;
+
+        scoreboard.displayScore(players, playersCount);
+        buttonsLeds.displayLeds(players, playersCount, expectingKey);
+
+        state = GameState::Turn;
+    }
+
+private:
+    uint8_t expectingKey = -1;
+    Scoreboard &scoreboard;
+    ButtonsLeds &buttonsLeds;
+    Buttons &buttons;
+    Player *players;
+    int playersCount;
+    int winnerId;
+};
+
+Buttons buttons;
+ButtonsLeds buttonsLeds(7, 8);
+Scoreboard scoreboard(0, 7);
+Player players[]{
+    Player(26, 4, 11, 2, 0, CRGB::Red, 1000),
+    Player(22, 4, 7, 4, 6, CRGB::Green, 2000)};
+GameLogic game(scoreboard, buttons, buttonsLeds, players, (sizeof players / sizeof players[0]));
+
+void setup()
+{
+    FastLED.addLeds<WS2812B, LED_STRIP_PIN, RGB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+    FastLED.setBrightness(255);
+
+    Serial.begin(115200);
+    pinMode(LED_BUILTIN, OUTPUT);
+    randomSeed(analogRead(A0));
+    game.start();
+}
+
+void loop()
+{
+    game.loop();
+}
+ 
